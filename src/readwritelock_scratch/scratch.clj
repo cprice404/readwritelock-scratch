@@ -1,5 +1,5 @@
 (ns readwritelock-scratch.scratch
-  (:import (java.util.concurrent ArrayBlockingQueue)
+  (:import (java.util.concurrent ArrayBlockingQueue LinkedBlockingDeque)
            (java.util.concurrent.locks ReentrantReadWriteLock))
   (:require [clojure.tools.logging :as log]
             [criterium.core :as criterium]))
@@ -10,6 +10,14 @@
     (dotimes [i 10]
       (log/debug "Adding to queue:" i)
       (.put q i))
+    q))
+
+(defn data-stack
+  []
+  (let [q (LinkedBlockingDeque. 10)]
+    (dotimes [i 10]
+      (log/debug "Adding to stack:" i)
+      (.push q i))
     q))
 
 (defn agent-finished
@@ -47,6 +55,12 @@
     (.put q x)
     x))
 
+(defn pop-and-push
+  [q]
+  (let [x (.takeFirst q)]
+    (.putFirst q x)
+    x))
+
 (defn borrow-with-lock-and-return
   [l q]
   (try
@@ -55,19 +69,18 @@
     (borrow-and-return q)
     (finally
       (.. l readLock unlock)))
-  (log/debug "Released read lock; lock count:" (.getReadLockCount l)))
+  #_(log/debug "Released read lock; lock count:" (.getReadLockCount l)))
 
 (defn do-borrow
   [borrow-fn num-threads borrows-per-thread]
-  (let [q (data-queue)
-        done-promise (promise)
+  (let [done-promise (promise)
         done-count (atom 0)
         as (agents num-threads done-promise done-count)
         borrows-fn (fn [a]
                      (log/debug "Starting agent:" (:id a))
                      (dotimes [i borrows-per-thread]
                        (log/debug "Agent" (:id a) "borrowing #" i)
-                       (let [x (borrow-fn q)]
+                       (let [x (borrow-fn)]
                          (log/debug "Agent" (:id a) "borrow #" i "returned" x)))
                      (agent-finished a)
                      a)]
@@ -95,24 +108,42 @@
 
 (defn borrow
   [num-threads borrows-per-thread]
-  (do-borrow borrow-and-return num-threads borrows-per-thread))
+  (do-borrow (partial borrow-and-return (data-queue))
+             num-threads
+             borrows-per-thread))
 
 (defn bench-borrow
   [num-threads borrows-per-thread]
   (do-bench-borrow
-    borrow-and-return
+    (partial borrow-and-return (data-queue))
     num-threads
     borrows-per-thread))
 
 (defn borrow-with-lock
   [num-threads borrows-per-thread fair]
-  (do-borrow (partial borrow-with-lock-and-return (ReentrantReadWriteLock. fair))
+  (do-borrow (partial borrow-with-lock-and-return
+                      (ReentrantReadWriteLock. fair)
+                      (data-queue))
              num-threads
              borrows-per-thread))
 
 (defn bench-borrow-with-lock
   [num-threads borrows-per-thread fair]
   (do-bench-borrow
-    (partial borrow-with-lock-and-return (ReentrantReadWriteLock. fair))
+    (partial borrow-with-lock-and-return
+             (ReentrantReadWriteLock. fair)
+             (data-queue))
     num-threads
     borrows-per-thread))
+
+(defn borrow-with-stack
+  [num-threads borrows-per-thread]
+  (do-borrow (partial pop-and-push (data-stack))
+             num-threads
+             borrows-per-thread))
+
+(defn bench-borrow-with-stack
+  [num-threads borrows-per-thread]
+  (do-bench-borrow (partial pop-and-push (data-stack))
+                   num-threads
+                   borrows-per-thread))
